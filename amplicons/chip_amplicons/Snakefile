@@ -1,0 +1,147 @@
+
+from glob import glob
+
+# Get sample, genome and other workflow parameters from config.yaml
+configfile: 'config.yaml'
+
+# define global variables
+reference_genome = config['reference_genome']
+bwa_index = config['bwa_index']
+samples = config['samples']
+mate = [1, 2]
+
+# rule all represents the final output of the pipeline step(s); 
+# could list all output files, but I'm only checking for the crucial files created in each step
+rule all:
+	input:
+		# (temporarily) combine all fastq files in one directory
+		expand('temp/{sample}_{mate}.fq.gz', sample = samples, mate = mate),
+		# FastQC results
+		expand('01_fastqc/{sample}_{mate}_fastqc.html', 
+			sample = samples, mate = mate),
+		# trimming results
+		expand('02_trim/{sample}_{mate}_val_{mate}.fq.gz', 
+			sample = samples, mate = mate),
+		# alignment results
+		expand('03_align/{sample}.sam', sample = samples),
+		# sort results
+		expand('03_align/{sample}.bam', sample = samples),
+		# index results
+		expand('03_align/{sample}.bam.bai', sample = samples),
+		# variant calling results
+		expand('04_variants/{sample}.g.vcf.gz', sample = samples),
+		# annotation results
+		expand('05_annotations/{sample}.ann.g.vcf', sample = samples),
+		# filtering and tidying results
+		expand('05_annotations/{sample}_anno_results.tsv', sample = samples)
+
+# move all fastq files to a temporary folder for ease of access during pipeline
+rule copy:
+	input:
+		lambda wildcards: glob('../ampliseq_210826-291695411/FASTQ_Generation_2021-08-27_19_50_28Z-454086635/{sample}*/*R{mate}*.fastq.gz'.format(sample = wildcards.sample, mate = wildcards.mate), recursive = True)
+	output:
+		temp('temp/{sample}_{mate}.fq.gz')
+	shell:
+		'cp {input} {output}'
+
+rule fastqc:
+	input:
+		'temp/{sample}_{mate}.fq.gz'
+	output:
+		'01_fastqc/{sample}_{mate}_fastqc.html'
+	log:
+		'01_fastqc/{sample}_{mate}_fastqc.log'
+	threads: 4
+	shell: 
+		'fastqc -t {threads} -o 01_fastqc/ {input} 2> {log}'
+
+rule trim_galore:
+	input:
+		r1 = 'temp/{sample}_1.fq.gz',
+		r2 = 'temp/{sample}_2.fq.gz'
+	output:
+		r1_trim = '02_trim/{sample}_1_val_1.fq.gz',
+		r2_trim = '02_trim/{sample}_2_val_2.fq.gz'
+	log:
+		'02_trim/{sample}_trim.log'
+	threads: 4
+	shell: 
+		'trim_galore --cores {threads} --retain_unpaired --paired --fastqc -q 30 --illumina --clip_R1 25 --clip_R2 25 --output 02_trim/ {input.r1} {input.r2} 2> {log}'
+
+rule bwa_align:
+	input:
+		r1 = '02_trim/{sample}_1_val_1.fq.gz',
+		r2 = '02_trim/{sample}_2_val_2.fq.gz'
+	output:
+		temp('03_align/{sample}.sam')
+		#'03_align/{sample}.bam'
+	log:
+		'03_align/{sample}_align.log'
+	params:
+		index = bwa_index,
+		sample_id = '{sample}'
+		# actually needs to be the path to the bwa index
+	threads: 4
+	shell:
+		'bwa mem -t {threads} {params.index} {input.r1} {input.r2} -R "@RG\\tID:{params.sample_id}\\tSM:{params.sample_id}\\tLB:lib1\\tPL:illumina\\tPU:group1" > {output} 2> {log}' #| samtools sort -@ {threads} -O BAM -o {output}
+
+rule sort:
+	input:
+		'03_align/{sample}.sam'
+	output:
+		'03_align/{sample}.bam'
+	threads: 4
+	shell:
+		'samtools sort -@ {threads} {input} -O BAM -o {output}'
+
+rule index:
+	input:
+		'03_align/{sample}.bam'
+	output:
+		'03_align/{sample}.bam.bai'
+	threads: 4
+	shell:
+		'samtools index -@ {threads} {input} {output}'
+
+rule call_variants:
+	input:
+		bam = '03_align/{sample}.bam',
+		index = '03_align/{sample}.bam.bai'
+	output:
+		'04_variants/{sample}.g.vcf.gz'
+	log:
+		'04_variants/{sample}_haplotypecaller.log'
+	params:
+		genome = reference_genome,
+		sample_id = '{sample}'
+	threads: 4
+	shell:
+		'/usr/local/programs/gatk-4.1.2.0/gatk --java-options "-Xmx4g" HaplotypeCaller --max-reads-per-alignment-start 0 -G StandardAnnotation -G AS_StandardAnnotation -G StandardHCAnnotation --reference {params.genome} --sample-name {params.sample_id} --input {input.bam} --output {output} -ERC GVCF 2> {log}'
+
+rule annotate:
+	input:
+		'04_variants/{sample}.g.vcf.gz'
+	output:
+		'05_annotations/{sample}.ann.g.vcf'
+	log:
+		'05_annotations/{sample}_annotation.log'
+	shell:
+		'java -Xmx8g -jar /usr/local/programs/snpeff/snpEff/snpEff.jar ann -noStats -geneId -filterInterval scripts/loci.bed hg38 {input} | java -jar /usr/local/programs/snpeff/snpEff/SnpSift.jar annotate /mnt/data/data_kk/annotations/variants/dbsnp_hg38_all_20180418.vcf.gz > {output} 2> {log}'
+
+rule filter_results:
+	input:
+		'05_annotations/{sample}.ann.g.vcf'
+	output:
+		'05_annotations/{sample}_anno_results.tsv'
+	shell:
+		'Rscript scripts/chip_vcf_to_tsv.R {input} 20 20 {output}'
+
+
+
+
+
+
+
+
+
+

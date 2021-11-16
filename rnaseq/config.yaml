@@ -1,0 +1,11 @@
+samples:
+  CB10214: ../raw_data/CB10214/
+  CB9416: ../raw_data/CB9416/
+
+reference_genome:
+  /mnt/data/gdata/human/hg38/hg38_soft_masked/
+
+# options for individual work steps if needed
+#trim_galore:
+  #quality: 30
+  #threads: 4

@@ -1,0 +1,100 @@
+
+from glob import glob
+
+# Get sample, genome and other workflow parameters from config.yaml
+configfile: 'config.yaml'
+
+# define global variables
+reference_genome = config['reference_genome']
+samples = config['samples']
+mate = [1, 2]
+
+
+# rule all represents the final output of the pipeline step(s); 
+# could list all output files, but I'm only checking for the crucial files crea
+rule all:
+	input:
+		# (temporarily) combine all fastq files in one directory
+		expand('temp/{sample}_{mate}.fq.gz', sample = samples, mate = mate),
+		# FastQC results
+		expand('01_fastqc/{sample}_{mate}_fastqc.html', 
+			sample = samples, mate = mate),
+		# trimming results
+		expand('02_trim/{sample}_{mate}_val_{mate}.fq.gz', 
+			sample = samples, mate = mate),
+		# alignment results
+		expand('03_align/{sample}_1_val_1_bismark_bt2_pe.bam',
+			sample = samples),
+		# extraction results
+		expand('04_extract/{sample}_1_val_1_bismark_bt2_pe.bismark.cov.gz',
+			sample = samples)
+
+
+rule copy:
+	input:
+		lambda wildcards: glob('../raw_data/{sample}/*{mate}.fq.gz'.format(sample = wildcards.sample, mate = wildcards.mate))
+	output:
+		temp('temp/{sample}_{mate}.fq.gz')
+	shell:
+		'cp {input} {output}'
+
+rule fastqc:
+	input:
+		'temp/{sample}_{mate}.fq.gz'
+	output:
+		'01_fastqc/{sample}_{mate}_fastqc.html'
+	log:
+		'01_fastqc/{sample}_{mate}_fastqc.log'
+	threads: 4
+	shell: 
+		'fastqc -t {threads} -o 01_fastqc/ {input} 2> {log}'
+
+rule trim_galore:
+	input:
+		r1 = 'temp/{sample}_1.fq.gz',
+		r2 = 'temp/{sample}_2.fq.gz'
+	output:
+		r1_trim = '02_trim/{sample}_1_val_1.fq.gz',
+		r2_trim = '02_trim/{sample}_2_val_2.fq.gz'
+	log:
+		'02_trim/{sample}_trim.log'
+	threads: 4
+	shell: 
+		'trim_galore --cores {threads} --rrbs --paired --fastqc -q 30 --illumina --output 02_trim/ {input.r1} {input.r2} 2> {log}'
+
+
+rule bismark_align:
+	input:
+		r1 = '02_trim/{sample}_1_val_1.fq.gz',
+		r2 = '02_trim/{sample}_2_val_2.fq.gz'
+	output:
+		'03_align/{sample}_1_val_1_bismark_bt2_pe.bam'
+	log:
+		'03_align/{sample}_align.log'
+	params:
+		genome = reference_genome
+	threads: 4
+	shell:
+		'bismark --bowtie2 --parallel {threads} {params.genome} --output 03_align/ -1 {input.r1} -2 {input.r2} 2> {log}'
+
+
+rule bismark_extract:
+	input:
+		'03_align/{sample}_1_val_1_bismark_bt2_pe.bam'
+	output:
+		'04_extract/{sample}_1_val_1_bismark_bt2_pe.bismark.cov.gz'
+	log:
+		'03_align/{sample}_extract.log'
+	threads: 4
+	shell:
+		'bismark_methylation_extractor --multicore {threads} --paired-end --include_overlap --bedGraph --output 04_extract/ {input} 2> {log}'
+
+
+
+
+
+
+
+
+
+

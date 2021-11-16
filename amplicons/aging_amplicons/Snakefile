@@ -1,0 +1,157 @@
+
+from glob import glob
+
+# Get sample, genome and other workflow parameters from config.yaml
+configfile: 'config.yaml'
+
+# define global variables
+reference_genome = config['reference_genome']
+samples = config['samples']
+mate = [1, 2]
+
+
+# rule all represents the final output of the pipeline step(s); 
+# could list all output files, but I'm only checking for the crucial files created in each step
+rule all:
+	input:
+		# (temporarily) combine all fastq files in one directory
+		expand('temp/{sample}_{mate}.fq.gz', sample = samples, mate = mate),
+		# FastQC results
+		expand('01_fastqc/{sample}_{mate}_fastqc.html', 
+			sample = samples, mate = mate),
+		# trimming results
+		expand('02_trim/{sample}_{mate}_val_{mate}.fq.gz', 
+			sample = samples, mate = mate),
+		# alignment results
+		expand('03_align/{sample}_1_val_1_bismark_bt2_pe.bam',
+			sample = samples),
+		# extraction results
+		expand('04_extract/{sample}_1_val_1_bismark_bt2_pe.bismark.cov.gz',
+			sample = samples),
+		# bisulfite conversion efficiency
+		expand('04_extract/{sample}_bs_efficency.tsv',
+			sample = samples),
+		# methylation allele counts
+		expand('05_alleles/{sample}_summarized_counts.tsv',
+			sample = samples),
+		# calculate average methylation over amplicon, JSD
+		expand('06_summary/{sample}_meth_jsd.tsv',
+			sample = samples)
+		# final report summarizing sequencing, methylation allele frequencies
+		#'amplicon_seq_report.html'
+
+# move all fastq files to a temporary folder for ease of access during pipeline
+rule copy:
+	input:
+		#lambda wildcards: glob('../**/{sample}*R{mate}*.fastq.gz'.format(sample = wildcards.sample, mate = wildcards.mate), recursive = True)
+		lambda wildcards: glob('../cooper2x48_2021-10-27-301897678/FASTQ_Generation_2021-10-28_17_23_43Z-479607137/{sample}*/{sample}*R{mate}*.fastq.gz'.format(sample = wildcards.sample, mate = wildcards.mate), recursive = True)
+	output:
+		temp('temp/{sample}_{mate}.fq.gz')
+	shell:
+		'cp {input} {output}'
+
+
+rule fastqc:
+	input:
+		'temp/{sample}_{mate}.fq.gz'
+	output:
+		'01_fastqc/{sample}_{mate}_fastqc.html'
+	log:
+		'01_fastqc/{sample}_{mate}_fastqc.log'
+	threads: 4
+	shell: 
+		'fastqc -t {threads} -o 01_fastqc/ {input} 2> {log}'
+
+
+rule trim_galore:
+	input:
+		r1 = 'temp/{sample}_1.fq.gz',
+		r2 = 'temp/{sample}_2.fq.gz'
+	output:
+		r1_trim = '02_trim/{sample}_1_val_1.fq.gz',
+		r2_trim = '02_trim/{sample}_2_val_2.fq.gz'
+	log:
+		'02_trim/{sample}_trim.log'
+	threads: 4
+	shell: 
+		'trim_galore --cores {threads} --rrbs --paired --fastqc -q 30 --illumina --output 02_trim/ {input.r1} {input.r2} 2> {log}'
+
+
+rule bismark_align:
+	input:
+		r1 = '02_trim/{sample}_1_val_1.fq.gz',
+		r2 = '02_trim/{sample}_2_val_2.fq.gz'
+	output:
+		'03_align/{sample}_1_val_1_bismark_bt2_pe.bam'
+	log:
+		'03_align/{sample}_align.log'
+	params:
+		genome = reference_genome
+	threads: 4
+	shell:
+		'bismark --bowtie2 --parallel {threads} {params.genome} --output 03_align/ -1 {input.r1} -2 {input.r2} 2> {log}'
+
+
+rule bismark_extract:
+	input:
+		'03_align/{sample}_1_val_1_bismark_bt2_pe.bam'
+	output:
+		'04_extract/{sample}_1_val_1_bismark_bt2_pe.bismark.cov.gz',
+		'04_extract/CpG_OT_{sample}_1_val_1_bismark_bt2_pe.txt',
+		'04_extract/CpG_OB_{sample}_1_val_1_bismark_bt2_pe.txt',
+		'04_extract/{sample}_1_val_1_bismark_bt2_pe_splitting_report.txt'
+	log:
+		'04_extract/{sample}_extract.log'
+	threads: 4
+	shell:
+		'bismark_methylation_extractor --multicore {threads} --paired-end --include_overlap --bedGraph --output 04_extract/ {input} 2> {log}'
+
+
+rule bs_efficiency:
+  input:
+    '04_extract/{sample}_1_val_1_bismark_bt2_pe_splitting_report.txt'
+  output:
+    '04_extract/{sample}_bs_efficency.tsv'
+  threads: 1
+  shell:
+    'Rscript scripts/bs_conversion_efficiency.R {input} {output}'
+
+
+rule allele_freq:
+	input:
+		cpg_ot = '04_extract/CpG_OT_{sample}_1_val_1_bismark_bt2_pe.txt',
+		cpg_ob = '04_extract/CpG_OB_{sample}_1_val_1_bismark_bt2_pe.txt'
+	output:
+		'05_alleles/{sample}_summarized_counts.tsv'
+	log:
+		'05_alleles/{sample}_alleles.log'
+	threads: 1
+	shell:
+		'Rscript scripts/get_meth_cpg_counts.R {input.cpg_ot} {input.cpg_ob} scripts/cpg_whitelist.tsv {output} 2> {log}'
+
+
+rule calc_summary:
+	input:
+		'05_alleles/{sample}_summarized_counts.tsv'
+	output:
+		'06_summary/{sample}_meth_jsd.tsv'
+	log:
+		'06_summary/{sample}_calc.log'
+	threads: 1
+	shell:
+		'Rscript scripts/calc_avg_meth_jsd.R scripts/2021-07_new_target_cb_ref.tsv {input} {output} 2> {log}'
+
+#rule report:
+#	input:
+#		'scripts/amplicon_seq_report.Rmd'
+#	output:
+#		'amplicon_seq_report.html'
+#	threads: 1
+#	shell:
+#		'Rscript -e \"rmarkdown::render(\'{input}\', output_file = \'{output}\')\"; rm -rf temp'
+
+
+
+
+
+

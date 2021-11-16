@@ -1,0 +1,77 @@
+---
+title: "Amplicon Sequencing Report"
+output:
+  html_document: default
+params:
+  args: myarg
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+library(vroom)
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+
+
+```{r}
+fs::dir_ls(path = '../05_alleles//', glob = '*summarized_counts.tsv') %>%
+  as.vector() -> files
+
+vroom(files, id = 'file_path') %>%
+  mutate(sample_id = str_remove_all(file_path, '../05_alleles/|_summarized_counts.tsv')) %>%
+  select(-file_path) %>%
+  select(sample_id, everything()) -> data
+```
+
+<br>
+
+### Distribution of the Number of Valid Reads Per Sample
+
+```{r}
+data %>%
+  distinct(sample_id, target, target_reads) %>%
+  group_by(sample_id) %>%
+  summarize(total_reads = sum(target_reads)) %>%
+  ungroup() %>%
+ggplot(aes(x = total_reads)) +
+  geom_histogram(base_size = 16) +
+  labs(x = 'Number of Reads', y = 'Number of Samples') +
+  theme_classic()
+```
+
+<br>
+
+### Distribution of the Number of Valid Reads Per Target
+
+```{r}
+data %>%
+  distinct(sample_id, target, target_reads) %>%
+ggplot(aes(x = target_reads)) +
+  geom_histogram(base_size = 16) +
+  facet_wrap(~ target) +
+  labs(x = 'Number of Reads', y = 'Number of Samples') +
+  theme_classic()
+```
+
+<br>
+
+### Methylation Allele Distribution Plots
+
+```{r}
+for (i in unique(data$sample_id)) {
+  data %>%
+    filter(sample_id == i) %>%
+  ggplot(aes(x = count_meth_cpgs, y = probability)) +
+    geom_col() +
+    facet_wrap(~ target) +
+    labs(x = 'Number Methylated CpGs', y = 'Proportion of Total Reads',
+         title = i) +
+    theme_bw() -> p
+  print(p)
+}
+```
+
+
+
