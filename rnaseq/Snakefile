@@ -61,7 +61,7 @@ rule trim_galore:
 		'02_trim/{sample}_trim.log'
 	threads: 4
 	shell: 
-		'trim_galore --cores {threads} --rrbs --paired --fastqc -q 30 --illumina --output 02_trim/ {input.r1} {input.r2} 2> {log}'
+		'trim_galore --cores {threads} --paired --fastqc -q 30 --illumina --output 02_trim/ {input.r1} {input.r2} 2> {log}'
 
 
 rule STAR_align:
